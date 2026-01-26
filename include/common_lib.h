@@ -8,6 +8,7 @@
 #include <fast_lio/msg/pose6_d.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/image.hpp>
 
 using namespace std;
 using namespace Eigen;
@@ -56,11 +57,21 @@ struct MeasureGroup     // Lidar data and imu dates for the curent process
     {
         lidar_beg_time = 0.0;
         this->lidar.reset(new PointCloudXYZI());
+        this->rgb.reset();
+        this->depth.reset();
+        rgb_time = 0.0;
+        depth_time = 0.0;
     };
     double lidar_beg_time;
     double lidar_end_time;
     PointCloudXYZI::Ptr lidar;
     deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu;
+
+    // 추가: RGB / Depth 이미지(스캔에 대응되는 이미지 포인터) 및 해당 타임스탬프
+    sensor_msgs::msg::Image::ConstSharedPtr rgb;
+    sensor_msgs::msg::Image::ConstSharedPtr depth;
+    double rgb_time;   // 초 단위
+    double depth_time; // 초 단위
 };
 
 struct StatesGroup

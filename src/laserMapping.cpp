@@ -44,6 +44,7 @@
 #include <so3_math.h>
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Core>
+#include <sensor_msgs/msg/image.hpp>
 #include "IMU_Processing.hpp"
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
@@ -107,6 +108,11 @@ vector<double>       extrinR(9, 0.0);
 deque<double>                     time_buffer;
 deque<PointCloudXYZI::Ptr>        lidar_buffer;
 deque<sensor_msgs::msg::Imu::ConstSharedPtr> imu_buffer;
+// RGB / Depth buffers
+deque<sensor_msgs::msg::Image::ConstSharedPtr> rgb_buffer;
+deque<sensor_msgs::msg::Image::ConstSharedPtr> depth_buffer;
+double last_timestamp_rgb = 0.0;
+double last_timestamp_depth = 0.0;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
@@ -378,6 +384,37 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
     sig_buffer.notify_all();
 }
 
+void rgb_cbk(const sensor_msgs::msg::Image::UniquePtr msg)
+{
+    mtx_buffer.lock();
+    double t = get_time_sec(msg->header.stamp);
+    // 루프백(시계역행) 처리: imu/lidar와 동일한 방식
+    if (!is_first_lidar && t < last_timestamp_rgb)
+    {
+        std::cerr << "rgb loop back, clear rgb buffer" << std::endl;
+        rgb_buffer.clear();
+    }
+    last_timestamp_rgb = t;
+    rgb_buffer.push_back(sensor_msgs::msg::Image::ConstSharedPtr(new sensor_msgs::msg::Image(*msg)));
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+}
+
+void depth_cbk(const sensor_msgs::msg::Image::UniquePtr msg)
+{
+    mtx_buffer.lock();
+    double t = get_time_sec(msg->header.stamp);
+    if (!is_first_lidar && t < last_timestamp_depth)
+    {
+        std::cerr << "depth loop back, clear depth buffer" << std::endl;
+        depth_buffer.clear();
+    }
+    last_timestamp_depth = t;
+    depth_buffer.push_back(sensor_msgs::msg::Image::ConstSharedPtr(new sensor_msgs::msg::Image(*msg)));
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+}
+
 double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
@@ -427,7 +464,65 @@ bool sync_packages(MeasureGroup &meas)
         meas.imu.push_back(imu_buffer.front());
         imu_buffer.pop_front();
     }
+    // RGB / Depth 데이터 선택하기(lidar 중심 시간 기준)
+     mtx_buffer.lock();
+    {
+        double lidar_mid_time = 0.5 * (meas.lidar_beg_time + lidar_end_time);
 
+        // RGB 선택: lidar_mid_time과의 절대 시간차가 가장 작은 이미지 선택
+        meas.rgb.reset();
+        meas.rgb_time = 0.0;
+        if (!rgb_buffer.empty())
+        {
+            sensor_msgs::msg::Image::ConstSharedPtr best_img;
+            double best_dt = 1e9;
+            for (auto &img : rgb_buffer)
+            {
+                double t = get_time_sec(img->header.stamp);
+                double dt = fabs(t - lidar_mid_time);
+                if (dt < best_dt)
+                {
+                    best_dt = dt;
+                    best_img = img;
+                }
+            }
+            if (best_img)
+            {
+                meas.rgb = best_img;
+                meas.rgb_time = get_time_sec(best_img->header.stamp);
+                // 버퍼 정리: 선택한 이미지 시점 이전(<=) 항목은 제거해서 버퍼 크기 제어
+                while (!rgb_buffer.empty() && get_time_sec(rgb_buffer.front()->header.stamp) <= meas.rgb_time)
+                    rgb_buffer.pop_front();
+            }
+        }
+
+        // Depth 선택: 동일한 방식
+        meas.depth.reset();
+        meas.depth_time = 0.0;
+        if (!depth_buffer.empty())
+        {
+            sensor_msgs::msg::Image::ConstSharedPtr best_img;
+            double best_dt = 1e9;
+            for (auto &img : depth_buffer)
+            {
+                double t = get_time_sec(img->header.stamp);
+                double dt = fabs(t - lidar_mid_time);
+                if (dt < best_dt)
+                {
+                    best_dt = dt;
+                    best_img = img;
+                }
+            }
+            if (best_img)
+            {
+                meas.depth = best_img;
+                meas.depth_time = get_time_sec(best_img->header.stamp);
+                while (!depth_buffer.empty() && get_time_sec(depth_buffer.front()->header.stamp) <= meas.depth_time)
+                    depth_buffer.pop_front();
+            }
+        }
+    }
+    mtx_buffer.unlock();
     lidar_buffer.pop_front();
     time_buffer.pop_front();
     lidar_pushed = false;
@@ -833,6 +928,8 @@ public:
         this->declare_parameter<int>("pcd_save.interval", -1);
         this->declare_parameter<vector<double>>("mapping.extrinsic_T", vector<double>());
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
+        this->declare_parameter<string>("common.rgb_topic", "/zed/zed_node/rgb/color/rect/image");
+        this->declare_parameter<string>("common.depth_topic", "/zed/zed_node/depth/depth_registered");
 
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -869,6 +966,9 @@ public:
         this->get_parameter_or<int>("pcd_save.interval", pcd_save_interval, -1);
         this->get_parameter_or<vector<double>>("mapping.extrinsic_T", extrinT, vector<double>());
         this->get_parameter_or<vector<double>>("mapping.extrinsic_R", extrinR, vector<double>());
+        string rgb_topic, depth_topic;
+        this->get_parameter_or<string>("common.rgb_topic", rgb_topic, string("/zed/zed_node/rgb/color/rect/image"));
+        this->get_parameter_or<string>("common.depth_topic", depth_topic, string("/zed/zed_node/depth/depth_registered"));
 
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
@@ -927,6 +1027,8 @@ public:
             sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
         }
         sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);
+        sub_rgb_ = this->create_subscription<sensor_msgs::msg::Image>(rgb_topic, rclcpp::SensorDataQoS(), rgb_cbk);
+        sub_depth_ = this->create_subscription<sensor_msgs::msg::Image>(depth_topic, rclcpp::SensorDataQoS(), depth_cbk);
         pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
         pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
         pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
@@ -1138,7 +1240,9 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_pcl_pc_;
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl_livox_;
-
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_rgb_;
+    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
+    
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr map_pub_timer_;
