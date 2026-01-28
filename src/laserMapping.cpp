@@ -63,6 +63,9 @@
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
+#include "digital_twin_prior.h"
+#include <visualization_msgs/msg/marker_array.hpp>
+#include <tf2/LinearMath/Quaternion.h>
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
@@ -930,6 +933,7 @@ public:
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
         this->declare_parameter<string>("common.rgb_topic", "/zed/zed_node/rgb/color/rect/image");
         this->declare_parameter<string>("common.depth_topic", "/zed/zed_node/depth/depth_registered");
+        this->declare_parameter<string>("digital_twin.config", std::string(""));
 
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -969,7 +973,17 @@ public:
         string rgb_topic, depth_topic;
         this->get_parameter_or<string>("common.rgb_topic", rgb_topic, string("/zed/zed_node/rgb/color/rect/image"));
         this->get_parameter_or<string>("common.depth_topic", depth_topic, string("/zed/zed_node/depth/depth_registered"));
-
+        this->get_parameter_or<string>("digital_twin.config", digital_twin_yaml_path_, string(""));
+        if (!digital_twin_yaml_path_.empty()) {
+        bool ok = loadPriorsFromYaml(digital_twin_yaml_path_, digital_priors_);
+        if (!ok) {
+            RCLCPP_WARN(this->get_logger(), "Failed to load digital twin priors from %s", digital_twin_yaml_path_.c_str());
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Loaded %zu digital twin priors from %s", digital_priors_.size(), digital_twin_yaml_path_.c_str());
+        }
+        } else {
+            RCLCPP_INFO(this->get_logger(), "No digital_twin.config parameter set; skipping prior load.");
+        }
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
         path.header.stamp = this->get_clock()->now();
@@ -1035,6 +1049,7 @@ public:
         pubLaserCloudMap_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/Laser_map", 20);
         pubOdomAftMapped_ = this->create_publisher<nav_msgs::msg::Odometry>("/Odometry", 20);
         pubPath_ = this->create_publisher<nav_msgs::msg::Path>("/path", 20);
+        priors_marker_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/digital_twin/priors", 1);
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
         //------------------------------------------------------------------------------------------------------
@@ -1247,6 +1262,10 @@ private:
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr map_pub_timer_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr map_save_srv_;
+
+    std::vector<ObjectPrior> digital_priors_;
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr priors_marker_pub_;
+    std::string digital_twin_yaml_path_;
 
     bool effect_pub_en = false, map_pub_en = false;
     int effect_feat_num = 0, frame_num = 0;

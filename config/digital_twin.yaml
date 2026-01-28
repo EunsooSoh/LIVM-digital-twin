@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    digital_twin:
+      priors:
+        - id: 1
+          dims: [1.2, 0.5, 2.0]      # L, W, H (meters) for cuboid 추후에 실제값으로 대체
+          pose: [2.0, 1.0, 0.0, 0, 0, 1.5708] # x,y,z,roll,pitch,yaw 추후에 실제값으로 대체
+          type: "cuboid"
+        - id: 2
+          dims: [0.5, 1.5, 0.0]      # for cylinder: [radius, height, unused] 추후에 실제값으로 대체
+          pose: [-3.0, 2.0, 0.0, 0, 0, 0]
+          type: "cylinder"
