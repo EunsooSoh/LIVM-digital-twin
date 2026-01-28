@@ -136,6 +136,8 @@ struct TagInfo {
 };
 double tag_size = 0.1;
 string tag_family = "tag36h11";
+// Note: tag_positions vector declared but not populated from config yet
+// Will be implemented when Tag-Plane system is added
 vector<TagInfo> tag_positions;
 
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
@@ -1054,6 +1056,8 @@ public:
         RCLCPP_INFO(this->get_logger(), "Tag Parameters (temporary, to be replaced with Tag-Plane):");
         RCLCPP_INFO(this->get_logger(), "  Tag size: %.3f m", tag_size);
         RCLCPP_INFO(this->get_logger(), "  Tag family: %s", tag_family.c_str());
+        RCLCPP_INFO(this->get_logger(), "  Note: Tag positions defined in config but not loaded yet");
+        RCLCPP_INFO(this->get_logger(), "  Will be implemented when Tag-Plane system is added");
         RCLCPP_INFO(this->get_logger(), "==============================================");
 
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);

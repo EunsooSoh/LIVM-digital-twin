@@ -72,6 +72,8 @@ tags:
   tag_family: "tag36h11" # AprilTag 패밀리 (AprilTag family)
   
   # 월드 프레임에서의 태그 위치 (Tag positions in world frame)
+  # 참고: 현재 버전에서는 로딩되지 않음 - Tag-Plane 시스템 구현 시 추가 예정
+  # Note: Not loaded in current version - will be added when Tag-Plane system is implemented
   tag_positions:
     - id: 0
       position: [0.0, 0.0, 0.0]
@@ -84,8 +86,12 @@ tags:
       orientation: [1., 0., 0., 0., 1., 0., 0., 0., 1.]
 ```
 
-**중요 (Important):** 태그 위치는 임시값이며, 향후 Tag-Plane 기반 시스템으로 교체될 예정입니다.
+**중요 (Important):** 
+- 태그 위치는 임시값이며, 향후 Tag-Plane 기반 시스템으로 교체될 예정입니다.
+- 현재 버전에서는 `tag_size`와 `tag_family`만 로딩됩니다. `tag_positions`는 Tag-Plane 시스템 구현 시 추가될 예정입니다.
+
 Tag positions are temporary values and will be replaced with a Tag-Plane based system in the future.
+Current version only loads `tag_size` and `tag_family`. `tag_positions` will be added when Tag-Plane system is implemented.
 
 ## 사용 방법 (Usage)
 
