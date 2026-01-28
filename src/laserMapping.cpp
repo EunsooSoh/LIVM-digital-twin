@@ -114,6 +114,30 @@ deque<sensor_msgs::msg::Image::ConstSharedPtr> depth_buffer;
 double last_timestamp_rgb = 0.0;
 double last_timestamp_depth = 0.0;
 
+// Stage A: Camera Intrinsics (fixed from calibration)
+struct CameraIntrinsics {
+    double fx, fy;    // Focal lengths
+    double cx, cy;    // Principal point
+    double k1, k2, k3;  // Radial distortion
+    double p1, p2;    // Tangential distortion
+} camera_intrinsics;
+
+// Stage A: Camera Extrinsics (Camera to LiDAR transformation)
+vector<double> camera_to_lidar_T(3, 0.0);
+vector<double> camera_to_lidar_R(9, 0.0);
+M3D Camera_R_wrt_Lidar(Eye3d);
+V3D Camera_T_wrt_Lidar(Zero3d);
+
+// Stage A: Tag/Marker Parameters (temporary, to be replaced with Tag-Plane)
+struct TagInfo {
+    int id;
+    V3D position;      // Position in world frame
+    M3D orientation;   // Orientation in world frame
+};
+double tag_size = 0.1;
+string tag_family = "tag36h11";
+vector<TagInfo> tag_positions;
+
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
@@ -930,6 +954,25 @@ public:
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
         this->declare_parameter<string>("common.rgb_topic", "/zed/zed_node/rgb/color/rect/image");
         this->declare_parameter<string>("common.depth_topic", "/zed/zed_node/depth/depth_registered");
+        
+        // Stage A: Camera Intrinsics Parameters
+        this->declare_parameter<double>("camera.intrinsics.fx", 700.0);
+        this->declare_parameter<double>("camera.intrinsics.fy", 700.0);
+        this->declare_parameter<double>("camera.intrinsics.cx", 640.0);
+        this->declare_parameter<double>("camera.intrinsics.cy", 360.0);
+        this->declare_parameter<double>("camera.intrinsics.k1", 0.0);
+        this->declare_parameter<double>("camera.intrinsics.k2", 0.0);
+        this->declare_parameter<double>("camera.intrinsics.k3", 0.0);
+        this->declare_parameter<double>("camera.intrinsics.p1", 0.0);
+        this->declare_parameter<double>("camera.intrinsics.p2", 0.0);
+        
+        // Stage A: Camera Extrinsics Parameters
+        this->declare_parameter<vector<double>>("camera.extrinsics.camera_to_lidar_T", vector<double>());
+        this->declare_parameter<vector<double>>("camera.extrinsics.camera_to_lidar_R", vector<double>());
+        
+        // Stage A: Tag Parameters (temporary)
+        this->declare_parameter<double>("tags.tag_size", 0.1);
+        this->declare_parameter<string>("tags.tag_family", "tag36h11");
 
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -969,6 +1012,49 @@ public:
         string rgb_topic, depth_topic;
         this->get_parameter_or<string>("common.rgb_topic", rgb_topic, string("/zed/zed_node/rgb/color/rect/image"));
         this->get_parameter_or<string>("common.depth_topic", depth_topic, string("/zed/zed_node/depth/depth_registered"));
+        
+        // Stage A: Load Camera Intrinsics (fixed from calibration)
+        this->get_parameter_or<double>("camera.intrinsics.fx", camera_intrinsics.fx, 700.0);
+        this->get_parameter_or<double>("camera.intrinsics.fy", camera_intrinsics.fy, 700.0);
+        this->get_parameter_or<double>("camera.intrinsics.cx", camera_intrinsics.cx, 640.0);
+        this->get_parameter_or<double>("camera.intrinsics.cy", camera_intrinsics.cy, 360.0);
+        this->get_parameter_or<double>("camera.intrinsics.k1", camera_intrinsics.k1, 0.0);
+        this->get_parameter_or<double>("camera.intrinsics.k2", camera_intrinsics.k2, 0.0);
+        this->get_parameter_or<double>("camera.intrinsics.k3", camera_intrinsics.k3, 0.0);
+        this->get_parameter_or<double>("camera.intrinsics.p1", camera_intrinsics.p1, 0.0);
+        this->get_parameter_or<double>("camera.intrinsics.p2", camera_intrinsics.p2, 0.0);
+        
+        // Stage A: Load Camera Extrinsics (Camera to LiDAR transformation)
+        this->get_parameter_or<vector<double>>("camera.extrinsics.camera_to_lidar_T", camera_to_lidar_T, vector<double>());
+        this->get_parameter_or<vector<double>>("camera.extrinsics.camera_to_lidar_R", camera_to_lidar_R, vector<double>());
+        
+        // Stage A: Load Tag Parameters (temporary values)
+        this->get_parameter_or<double>("tags.tag_size", tag_size, 0.1);
+        this->get_parameter_or<string>("tags.tag_family", tag_family, string("tag36h11"));
+
+        // Log Stage A camera calibration parameters
+        RCLCPP_INFO(this->get_logger(), "=== Stage A: Camera Calibration Parameters ===");
+        RCLCPP_INFO(this->get_logger(), "Camera Intrinsics (fixed):");
+        RCLCPP_INFO(this->get_logger(), "  fx: %.2f, fy: %.2f", camera_intrinsics.fx, camera_intrinsics.fy);
+        RCLCPP_INFO(this->get_logger(), "  cx: %.2f, cy: %.2f", camera_intrinsics.cx, camera_intrinsics.cy);
+        RCLCPP_INFO(this->get_logger(), "  k1: %.6f, k2: %.6f, k3: %.6f", camera_intrinsics.k1, camera_intrinsics.k2, camera_intrinsics.k3);
+        RCLCPP_INFO(this->get_logger(), "  p1: %.6f, p2: %.6f", camera_intrinsics.p1, camera_intrinsics.p2);
+        
+        if (camera_to_lidar_T.size() == 3 && camera_to_lidar_R.size() == 9) {
+            Camera_T_wrt_Lidar << VEC_FROM_ARRAY(camera_to_lidar_T);
+            Camera_R_wrt_Lidar << MAT_FROM_ARRAY(camera_to_lidar_R);
+            RCLCPP_INFO(this->get_logger(), "Camera Extrinsics (Camera to LiDAR):");
+            RCLCPP_INFO(this->get_logger(), "  Translation: [%.3f, %.3f, %.3f]", 
+                       Camera_T_wrt_Lidar(0), Camera_T_wrt_Lidar(1), Camera_T_wrt_Lidar(2));
+            RCLCPP_INFO(this->get_logger(), "  Rotation matrix loaded (3x3)");
+        } else {
+            RCLCPP_WARN(this->get_logger(), "Camera extrinsics not properly configured, using identity");
+        }
+        
+        RCLCPP_INFO(this->get_logger(), "Tag Parameters (temporary, to be replaced with Tag-Plane):");
+        RCLCPP_INFO(this->get_logger(), "  Tag size: %.3f m", tag_size);
+        RCLCPP_INFO(this->get_logger(), "  Tag family: %s", tag_family.c_str());
+        RCLCPP_INFO(this->get_logger(), "==============================================");
 
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
