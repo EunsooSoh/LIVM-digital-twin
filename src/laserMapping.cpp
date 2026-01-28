@@ -63,6 +63,7 @@
 #include <livox_ros_driver2/msg/custom_msg.hpp>
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
+#include <sensor_msgs/image_encodings.hpp>
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
@@ -98,7 +99,13 @@ int    iterCount = 0, feats_down_size = 0, NUM_MAX_ITERATIONS = 0, laserCloudVal
 bool   point_selected_surf[100000] = {0};
 bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
-bool    is_first_lidar = true;
+bool   is_first_lidar = true;
+
+/* Camera (ZED) intrinsics & extrinsics (camera -> body) */
+double cam_fx = 700.0, cam_fy = 700.0, cam_cx = 640.0, cam_cy = 360.0; // 임시
+double cam_depth_scale = 1.0; // depth 이미지 단위 -> 미터 (예: depth가 mm이면 0.001)
+Eigen::Matrix3d cam_R_cam2body = Eigen::Matrix3d::Identity();
+Eigen::Vector3d cam_T_cam2body = Eigen::Vector3d::Zero();
 
 vector<vector<int>>  pointSearchInd_surf; 
 vector<BoxPointType> cub_needrm;
@@ -284,6 +291,91 @@ void lasermap_fov_segment()
     double delete_begin = omp_get_wtime();
     if(cub_needrm.size() > 0) kdtree_delete_counter = ikdtree.Delete_Point_Boxes(cub_needrm);
     kdtree_delete_time = omp_get_wtime() - delete_begin;
+}
+
+void depthImageToBodyPoints(const sensor_msgs::msg::Image::ConstSharedPtr &depth_img,
+                            const sensor_msgs::msg::Image::ConstSharedPtr &rgb_img,
+                            PointVector &out_points)
+{
+    if (!depth_img) return;
+    int width  = depth_img->width;
+    int height = depth_img->height;
+    string enc = depth_img->encoding;
+
+    // handle common encodings: 32FC1, 16UC1
+    bool is_float = (enc == sensor_msgs::image_encodings::TYPE_32FC1 || enc == "32FC1");
+    bool is_uint16 = (enc == sensor_msgs::image_encodings::TYPE_16UC1 || enc == "16UC1");
+    if (!is_float && !is_uint16) {
+        RCLCPP_WARN(rclcpp::get_logger("laserMapping"), "Unsupported depth encoding: %s", enc.c_str());
+        return;
+    }
+
+    // rgb lookup if available
+    const uint8_t *rgb_data = nullptr;
+    string rgb_enc;
+    int rgb_step = 0;
+    if (rgb_img) {
+        rgb_data = rgb_img->data.data();
+        rgb_enc = rgb_img->encoding;
+        rgb_step = rgb_img->step;
+    }
+
+    const uint8_t *data = depth_img->data.data();
+    int step = depth_img->step;
+
+    for (int v = 0; v < height; ++v) {
+        const uint8_t* row_ptr = data + v * step;
+        for (int u = 0; u < width; ++u) {
+            double z = 0.0;
+            if (is_float) {
+                const float* fp = reinterpret_cast<const float*>(row_ptr);
+                z = static_cast<double>(fp[u]);
+            } else if (is_uint16) {
+                const uint16_t* up = reinterpret_cast<const uint16_t*>(row_ptr);
+                z = static_cast<double>(up[u]) * cam_depth_scale; // scale param
+            }
+            if (z <= 0.0001 || !isfinite(z)) continue;
+
+            // backproject to camera frame (ZED coordinate assumption: x right, y down, z forward)
+            double x_cam = (u - cam_cx) * z / cam_fx;
+            double y_cam = (v - cam_cy) * z / cam_fy;
+            Eigen::Vector3d p_cam(x_cam, y_cam, z);
+
+            // transform to body frame: p_body = R_cam2body * p_cam + T_cam2body
+            Eigen::Vector3d p_body = cam_R_cam2body * p_cam + cam_T_cam2body;
+
+            PointType pt;
+            pt.x = static_cast<float>(p_body[0]);
+            pt.y = static_cast<float>(p_body[1]);
+            pt.z = static_cast<float>(p_body[2]);
+
+            // set intensity from RGB if available: sample and convert to grayscale
+            if (rgb_data && rgb_step > 0) {
+                int px = u;
+                int py = v;
+                if (px >= 0 && px < (int)width && py >= 0 && py < (int)height) {
+                    const uint8_t* p = rgb_data + py * rgb_step + px * 3; // assume bgr/rgb3
+                    // try common encodings: "rgb8" or "bgr8"
+                    uint8_t r=0,g=0,b=0;
+                    if (rgb_enc == "rgb8" || rgb_enc == "RGB8") {
+                        r = p[0]; g = p[1]; b = p[2];
+                    } else { // assume bgr8
+                        b = p[0]; g = p[1]; r = p[2];
+                    }
+                    // grayscale
+                    float gray = (0.299f * r + 0.587f * g + 0.114f * b) / 255.0f;
+                    pt.intensity = gray;
+                } else {
+                    pt.intensity = 0.0f;
+                }
+            } else {
+                pt.intensity = static_cast<float>(z); // fallback: store depth as intensity
+            }
+
+            // normals unused here
+            out_points.push_back(pt);
+        }
+    }
 }
 
 void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg) 
@@ -535,6 +627,19 @@ void map_incremental()
     PointVector PointToAdd;
     PointVector PointNoNeedDownsample;
     PointToAdd.reserve(feats_down_size);
+    if (Measures.depth) {
+    PointVector cam_points;
+    cam_points.reserve(100000); // 필요에 따라 조정
+    depthImageToBodyPoints(Measures.depth, Measures.rgb, cam_points);
+
+    // transform each point from body -> world using existing helper
+    for (auto &p : cam_points) {
+        PointType world_p = p;
+        // reuse existing pointBodyToWorld helper:
+        pointBodyToWorld(&p, &world_p); // 기존 함수가 (body)->(world) 변환을 수행한다고 가정
+        PointToAdd.push_back(world_p);
+    }
+}
     PointNoNeedDownsample.reserve(feats_down_size);
     for (int i = 0; i < feats_down_size; i++)
     {
@@ -930,6 +1035,13 @@ public:
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
         this->declare_parameter<string>("common.rgb_topic", "/zed/zed_node/rgb/color/rect/image");
         this->declare_parameter<string>("common.depth_topic", "/zed/zed_node/depth/depth_registered");
+        this->declare_parameter<double>("camera.fx", cam_fx);
+        this->declare_parameter<double>("camera.fy", cam_fy);
+        this->declare_parameter<double>("camera.cx", cam_cx);
+        this->declare_parameter<double>("camera.cy", cam_cy);
+        this->declare_parameter<double>("camera.depth_scale", cam_depth_scale);
+        this->declare_parameter<vector<double>>("camera.extrinsic_T", vector<double>()); // [tx, ty, tz]
+        this->declare_parameter<vector<double>>("camera.extrinsic_R", vector<double>()); // 3x3 row-major
 
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
@@ -969,6 +1081,26 @@ public:
         string rgb_topic, depth_topic;
         this->get_parameter_or<string>("common.rgb_topic", rgb_topic, string("/zed/zed_node/rgb/color/rect/image"));
         this->get_parameter_or<string>("common.depth_topic", depth_topic, string("/zed/zed_node/depth/depth_registered"));
+        this->get_parameter_or<double>("camera.fx", cam_fx, cam_fx);
+        this->get_parameter_or<double>("camera.fy", cam_fy, cam_fy);
+        this->get_parameter_or<double>("camera.cx", cam_cx, cam_cx);
+        this->get_parameter_or<double>("camera.cy", cam_cy, cam_cy);
+        this->get_parameter_or<double>("camera.depth_scale", cam_depth_scale, cam_depth_scale);
+        
+        vector<double> cam_T_vec;
+        vector<double> cam_R_vec;
+        this->get_parameter_or<vector<double>>("camera.extrinsic_T", cam_T_vec, vector<double>());
+        this->get_parameter_or<vector<double>>("camera.extrinsic_R", cam_R_vec, vector<double>());
+
+        if (cam_T_vec.size() == 3) {
+            cam_T_cam2body = Eigen::Vector3d(cam_T_vec[0], cam_T_vec[1], cam_T_vec[2]);
+        }
+        if (cam_R_vec.size() == 9) {
+            cam_R_cam2body = Eigen::Matrix3d::Identity();
+            cam_R_cam2body << cam_R_vec[0], cam_R_vec[1], cam_R_vec[2],
+                            cam_R_vec[3], cam_R_vec[4], cam_R_vec[5],
+                            cam_R_vec[6], cam_R_vec[7], cam_R_vec[8];
+        }
 
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
 
