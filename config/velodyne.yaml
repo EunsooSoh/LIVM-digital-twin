@@ -12,6 +12,9 @@
         common:
             lid_topic:  "/velodyne_points"
             imu_topic:  "/zed/zed_node/imu/data"
+            rgb_topic:  "/zed/zed_node/rgb/image_rect_color"
+            depth_topic:  "/zed/zed_node/depth/depth_registered"
+            camera_info_topic:  "/zed/zed_node/rgb/camera_info"
             time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
             time_offset_lidar_to_imu: -0.46680 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
                                         # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
@@ -48,20 +51,25 @@
                                         # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
         # Stage A: Camera Calibration Parameters
+        # For ZED camera: Enable auto_load_from_camera_info to automatically get calibration from camera
         camera:
-            # Camera intrinsics (fixed from Stage A calibration)
-            intrinsics:
-                fx: 700.0               # Focal length in x (pixels)
-                fy: 700.0               # Focal length in y (pixels)
-                cx: 640.0               # Principal point x (pixels)
-                cy: 360.0               # Principal point y (pixels)
-                k1: 0.0                 # Radial distortion coefficient
-                k2: 0.0                 # Radial distortion coefficient
-                k3: 0.0                 # Radial distortion coefficient
-                p1: 0.0                 # Tangential distortion coefficient
-                p2: 0.0                 # Tangential distortion coefficient
+            # Auto-load camera intrinsics from camera_info topic (recommended for ZED camera)
+            auto_load_from_camera_info: true  # Set to true to use ZED's built-in calibration
+            
+            # Manual camera intrinsics (only used if auto_load_from_camera_info is false)
+            # intrinsics:
+            #     fx: 700.0               # Focal length in x (pixels)
+            #     fy: 700.0               # Focal length in y (pixels)
+            #     cx: 640.0               # Principal point x (pixels)
+            #     cy: 360.0               # Principal point y (pixels)
+            #     k1: 0.0                 # Radial distortion coefficient
+            #     k2: 0.0                 # Radial distortion coefficient
+            #     k3: 0.0                 # Radial distortion coefficient
+            #     p1: 0.0                 # Tangential distortion coefficient
+            #     p2: 0.0                 # Tangential distortion coefficient
             
             # Camera extrinsics (Camera to LiDAR/IMU transformation)
+            # Optional: Can be obtained from TF tree if available
             extrinsics:
                 camera_to_lidar_T: [ 0.0, 0.0, 0.0 ]  # Translation [x, y, z] in meters
                 camera_to_lidar_R: [ 1., 0., 0.,      # Rotation matrix (row-major)

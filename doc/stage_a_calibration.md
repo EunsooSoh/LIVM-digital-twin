@@ -24,12 +24,30 @@ Stage A is the initial calibration phase of the digital twin system, which fixes
 
 ### 1. 카메라 내부 파라미터 (Camera Intrinsics)
 
-카메라 캘리브레이션으로부터 얻은 내부 파라미터를 설정합니다.
+**방법 1: 자동 로딩 (권장 - ZED 카메라용)**
 
-Set the intrinsic parameters obtained from camera calibration.
+ZED 카메라를 사용하는 경우, camera_info 토픽에서 캘리브레이션을 자동으로 가져올 수 있습니다.
+
+For ZED camera, you can automatically load calibration from the camera_info topic.
 
 ```yaml
 camera:
+  auto_load_from_camera_info: true  # ZED 카메라의 내장 캘리브레이션 사용
+```
+
+이렇게 설정하면 별도의 내부 파라미터 입력 없이 ZED 카메라에서 자동으로 캘리브레이션을 받아옵니다.
+
+With this setting, calibration is automatically obtained from the ZED camera without manual parameter input.
+
+**방법 2: 수동 설정**
+
+카메라 캘리브레이션으로부터 얻은 내부 파라미터를 수동으로 설정합니다.
+
+Manually set the intrinsic parameters obtained from camera calibration.
+
+```yaml
+camera:
+  auto_load_from_camera_info: false  # 수동 설정 모드
   intrinsics:
     fx: 700.0      # 초점 거리 x (Focal length x) in pixels
     fy: 700.0      # 초점 거리 y (Focal length y) in pixels
@@ -42,8 +60,11 @@ camera:
     p2: 0.0        # 접선 왜곡 계수 (Tangential distortion coefficient)
 ```
 
-**참고 (Note):** 이 파라미터들은 Stage A 캘리브레이션에서 고정되며, 런타임에는 변경되지 않습니다.
-These parameters are fixed from Stage A calibration and do not change during runtime.
+**참고 (Note):** 
+- ZED 카메라를 사용하는 경우 `auto_load_from_camera_info: true` 사용을 권장합니다.
+- 자동 로딩 모드에서는 카메라 실행 후 첫 번째 camera_info 메시지를 받으면 즉시 캘리브레이션이 로드됩니다.
+- For ZED camera, using `auto_load_from_camera_info: true` is recommended.
+- In auto-load mode, calibration is loaded immediately upon receiving the first camera_info message after camera launch.
 
 ### 2. 카메라 외부 파라미터 (Camera Extrinsics)
 
@@ -101,9 +122,31 @@ Current version only loads `tag_size` and `tag_family`. `tag_positions` will be 
 
 The following logs are printed at system startup:
 
+**자동 로딩 모드 (Auto-load mode):**
 ```
 [INFO] === Stage A: Camera Calibration Parameters ===
-[INFO] Camera Intrinsics (fixed):
+[INFO] Camera Intrinsics: Will be auto-loaded from camera_info topic
+[INFO] Subscribed to camera_info topic: /zed/zed_node/rgb/camera_info
+...
+[Stage A] Camera intrinsics auto-loaded from camera_info:
+  fx: 527.82, fy: 527.82
+  cx: 641.06, cy: 366.21
+  Distortion [k1, k2, p1, p2, k3]: [-0.042123, 0.010456, 0.000123, -0.000456, 0.000789]
+[INFO] Camera Extrinsics (Camera to LiDAR):
+[INFO]   Translation: [0.000, 0.000, 0.000]
+[INFO]   Rotation matrix loaded (3x3)
+[INFO] Tag Parameters (temporary, to be replaced with Tag-Plane):
+[INFO]   Tag size: 0.100 m
+[INFO]   Tag family: tag36h11
+[INFO]   Note: Tag positions loading not implemented yet
+[INFO]         Will be added when Tag-Plane system is implemented
+[INFO] ==============================================
+```
+
+**수동 설정 모드 (Manual configuration mode):**
+```
+[INFO] === Stage A: Camera Calibration Parameters ===
+[INFO] Camera Intrinsics (loaded from config):
 [INFO]   fx: 700.00, fy: 700.00
 [INFO]   cx: 640.00, cy: 360.00
 [INFO]   k1: 0.000000, k2: 0.000000, k3: 0.000000
@@ -121,9 +164,19 @@ The following logs are printed at system startup:
 
 ### 파라미터 업데이트 (Update Parameters)
 
+**ZED 카메라 사용 시 (Using ZED Camera):**
+
+1. `config/velodyne.yaml` 파일을 엽니다
+2. `camera.auto_load_from_camera_info: true`로 설정되어 있는지 확인합니다
+3. ZED 카메라를 실행합니다: `ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i`
+4. LIVM 노드를 실행합니다: 카메라 캘리브레이션이 자동으로 로드됩니다
+
+**수동 설정 시 (Manual Configuration):**
+
 1. 해당 센서의 config 파일을 엽니다 (예: `config/avia.yaml`)
-2. `camera` 및 `tags` 섹션의 값을 업데이트합니다
-3. 노드를 재시작하여 새 파라미터를 로드합니다
+2. `camera.auto_load_from_camera_info: false`로 설정합니다
+3. `camera.intrinsics` 섹션의 값을 업데이트합니다
+4. 노드를 재시작하여 새 파라미터를 로드합니다
 
 ## 다음 단계 (Next Steps)
 
@@ -133,6 +186,8 @@ The following logs are printed at system startup:
 
 ## 참고사항 (Notes)
 
-- 모든 설정 파일(avia.yaml, mid360.yaml, velodyne.yaml, horizon.yaml, ouster64.yaml)에 동일한 구조의 파라미터가 추가되었습니다.
+- **ZED 카메라 사용자**: `auto_load_from_camera_info: true` 설정으로 별도의 캘리브레이션 파일 없이 자동으로 사용할 수 있습니다.
+- **Velodyne LiDAR 기본 설정**: `config/velodyne.yaml`에는 ZED 카메라 자동 로딩이 기본으로 활성화되어 있습니다.
 - 카메라 내부 파라미터는 Stage A에서 고정되며, 실행 중에는 변경되지 않습니다.
-- 태그 파라미터는 임시값으로, 향후 업데이트가 필요합니다.
+- 태그 파라미터는 임시값으로, 향후 Tag-Plane 시스템으로 교체될 예정입니다.
+- 자동 로딩은 첫 번째 camera_info 메시지 수신 시 한 번만 실행됩니다.

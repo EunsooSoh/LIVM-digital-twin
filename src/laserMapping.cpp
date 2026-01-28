@@ -56,6 +56,7 @@
 #include <pcl/io/pcd_io.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -121,6 +122,10 @@ struct CameraIntrinsics {
     double k1, k2, k3;  // Radial distortion
     double p1, p2;    // Tangential distortion
 } camera_intrinsics;
+
+// Stage A: Auto-load camera calibration from camera_info topic
+bool camera_info_auto_load = false;
+bool camera_info_received = false;
 
 // Stage A: Camera Extrinsics (Camera to LiDAR transformation)
 vector<double> camera_to_lidar_T(3, 0.0);
@@ -439,6 +444,41 @@ void depth_cbk(const sensor_msgs::msg::Image::UniquePtr msg)
     depth_buffer.push_back(sensor_msgs::msg::Image::ConstSharedPtr(new sensor_msgs::msg::Image(*msg)));
     mtx_buffer.unlock();
     sig_buffer.notify_all();
+}
+
+// Stage A: Callback to automatically load camera intrinsics from camera_info
+void camera_info_cbk(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
+{
+    if (!camera_info_auto_load || camera_info_received)
+        return;
+    
+    // Extract intrinsics from camera_info K matrix
+    // K = [fx  0 cx]
+    //     [ 0 fy cy]
+    //     [ 0  0  1]
+    camera_intrinsics.fx = msg->k[0];
+    camera_intrinsics.fy = msg->k[4];
+    camera_intrinsics.cx = msg->k[2];
+    camera_intrinsics.cy = msg->k[5];
+    
+    // Extract distortion coefficients (plumb_bob model: k1, k2, p1, p2, k3)
+    if (msg->d.size() >= 5) {
+        camera_intrinsics.k1 = msg->d[0];
+        camera_intrinsics.k2 = msg->d[1];
+        camera_intrinsics.p1 = msg->d[2];
+        camera_intrinsics.p2 = msg->d[3];
+        camera_intrinsics.k3 = msg->d[4];
+    }
+    
+    camera_info_received = true;
+    
+    std::cout << "[Stage A] Camera intrinsics auto-loaded from camera_info:" << std::endl;
+    std::cout << "  fx: " << camera_intrinsics.fx << ", fy: " << camera_intrinsics.fy << std::endl;
+    std::cout << "  cx: " << camera_intrinsics.cx << ", cy: " << camera_intrinsics.cy << std::endl;
+    std::cout << "  Distortion [k1, k2, p1, p2, k3]: [" 
+              << camera_intrinsics.k1 << ", " << camera_intrinsics.k2 << ", " 
+              << camera_intrinsics.p1 << ", " << camera_intrinsics.p2 << ", " 
+              << camera_intrinsics.k3 << "]" << std::endl;
 }
 
 double lidar_mean_scantime = 0.0;
@@ -956,6 +996,10 @@ public:
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
         this->declare_parameter<string>("common.rgb_topic", "/zed/zed_node/rgb/color/rect/image");
         this->declare_parameter<string>("common.depth_topic", "/zed/zed_node/depth/depth_registered");
+        this->declare_parameter<string>("common.camera_info_topic", "/zed/zed_node/rgb/camera_info");
+        
+        // Stage A: Enable automatic camera calibration loading from camera_info topic
+        this->declare_parameter<bool>("camera.auto_load_from_camera_info", false);
         
         // Stage A: Camera Intrinsics Parameters
         this->declare_parameter<double>("camera.intrinsics.fx", 700.0);
@@ -1015,16 +1059,25 @@ public:
         this->get_parameter_or<string>("common.rgb_topic", rgb_topic, string("/zed/zed_node/rgb/color/rect/image"));
         this->get_parameter_or<string>("common.depth_topic", depth_topic, string("/zed/zed_node/depth/depth_registered"));
         
-        // Stage A: Load Camera Intrinsics (fixed from calibration)
-        this->get_parameter_or<double>("camera.intrinsics.fx", camera_intrinsics.fx, 700.0);
-        this->get_parameter_or<double>("camera.intrinsics.fy", camera_intrinsics.fy, 700.0);
-        this->get_parameter_or<double>("camera.intrinsics.cx", camera_intrinsics.cx, 640.0);
-        this->get_parameter_or<double>("camera.intrinsics.cy", camera_intrinsics.cy, 360.0);
-        this->get_parameter_or<double>("camera.intrinsics.k1", camera_intrinsics.k1, 0.0);
-        this->get_parameter_or<double>("camera.intrinsics.k2", camera_intrinsics.k2, 0.0);
-        this->get_parameter_or<double>("camera.intrinsics.k3", camera_intrinsics.k3, 0.0);
-        this->get_parameter_or<double>("camera.intrinsics.p1", camera_intrinsics.p1, 0.0);
-        this->get_parameter_or<double>("camera.intrinsics.p2", camera_intrinsics.p2, 0.0);
+        string camera_info_topic;
+        this->get_parameter_or<string>("common.camera_info_topic", camera_info_topic, string("/zed/zed_node/rgb/camera_info"));
+        this->get_parameter_or<bool>("camera.auto_load_from_camera_info", camera_info_auto_load, false);
+        
+        // Stage A: Load Camera Intrinsics (fixed from calibration or auto-loaded from camera_info)
+        if (!camera_info_auto_load) {
+            // Manual configuration from YAML
+            this->get_parameter_or<double>("camera.intrinsics.fx", camera_intrinsics.fx, 700.0);
+            this->get_parameter_or<double>("camera.intrinsics.fy", camera_intrinsics.fy, 700.0);
+            this->get_parameter_or<double>("camera.intrinsics.cx", camera_intrinsics.cx, 640.0);
+            this->get_parameter_or<double>("camera.intrinsics.cy", camera_intrinsics.cy, 360.0);
+            this->get_parameter_or<double>("camera.intrinsics.k1", camera_intrinsics.k1, 0.0);
+            this->get_parameter_or<double>("camera.intrinsics.k2", camera_intrinsics.k2, 0.0);
+            this->get_parameter_or<double>("camera.intrinsics.k3", camera_intrinsics.k3, 0.0);
+            this->get_parameter_or<double>("camera.intrinsics.p1", camera_intrinsics.p1, 0.0);
+            this->get_parameter_or<double>("camera.intrinsics.p2", camera_intrinsics.p2, 0.0);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Camera intrinsics will be auto-loaded from: %s", camera_info_topic.c_str());
+        }
         
         // Stage A: Load Camera Extrinsics (Camera to LiDAR transformation)
         this->get_parameter_or<vector<double>>("camera.extrinsics.camera_to_lidar_T", camera_to_lidar_T, vector<double>());
@@ -1036,11 +1089,15 @@ public:
 
         // Log Stage A camera calibration parameters
         RCLCPP_INFO(this->get_logger(), "=== Stage A: Camera Calibration Parameters ===");
-        RCLCPP_INFO(this->get_logger(), "Camera Intrinsics (fixed):");
-        RCLCPP_INFO(this->get_logger(), "  fx: %.2f, fy: %.2f", camera_intrinsics.fx, camera_intrinsics.fy);
-        RCLCPP_INFO(this->get_logger(), "  cx: %.2f, cy: %.2f", camera_intrinsics.cx, camera_intrinsics.cy);
-        RCLCPP_INFO(this->get_logger(), "  k1: %.6f, k2: %.6f, k3: %.6f", camera_intrinsics.k1, camera_intrinsics.k2, camera_intrinsics.k3);
-        RCLCPP_INFO(this->get_logger(), "  p1: %.6f, p2: %.6f", camera_intrinsics.p1, camera_intrinsics.p2);
+        if (!camera_info_auto_load) {
+            RCLCPP_INFO(this->get_logger(), "Camera Intrinsics (loaded from config):");
+            RCLCPP_INFO(this->get_logger(), "  fx: %.2f, fy: %.2f", camera_intrinsics.fx, camera_intrinsics.fy);
+            RCLCPP_INFO(this->get_logger(), "  cx: %.2f, cy: %.2f", camera_intrinsics.cx, camera_intrinsics.cy);
+            RCLCPP_INFO(this->get_logger(), "  k1: %.6f, k2: %.6f, k3: %.6f", camera_intrinsics.k1, camera_intrinsics.k2, camera_intrinsics.k3);
+            RCLCPP_INFO(this->get_logger(), "  p1: %.6f, p2: %.6f", camera_intrinsics.p1, camera_intrinsics.p2);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Camera Intrinsics: Will be auto-loaded from camera_info topic");
+        }
         
         if (camera_to_lidar_T.size() == 3 && camera_to_lidar_R.size() == 9) {
             Camera_T_wrt_Lidar << VEC_FROM_ARRAY(camera_to_lidar_T);
@@ -1119,6 +1176,14 @@ public:
         sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);
         sub_rgb_ = this->create_subscription<sensor_msgs::msg::Image>(rgb_topic, rclcpp::SensorDataQoS(), rgb_cbk);
         sub_depth_ = this->create_subscription<sensor_msgs::msg::Image>(depth_topic, rclcpp::SensorDataQoS(), depth_cbk);
+        
+        // Stage A: Subscribe to camera_info if auto-load is enabled
+        if (camera_info_auto_load) {
+            sub_camera_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+                camera_info_topic, rclcpp::SensorDataQoS(), camera_info_cbk);
+            RCLCPP_INFO(this->get_logger(), "Subscribed to camera_info topic: %s", camera_info_topic.c_str());
+        }
+        
         pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
         pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
         pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
@@ -1332,6 +1397,7 @@ private:
     rclcpp::Subscription<livox_ros_driver2::msg::CustomMsg>::SharedPtr sub_pcl_livox_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_rgb_;
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_depth_;
+    rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;  // Stage A: Auto-load camera intrinsics
     
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     rclcpp::TimerBase::SharedPtr timer_;
