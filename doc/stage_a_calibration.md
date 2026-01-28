@@ -36,8 +36,13 @@ camera:
 ```
 
 이렇게 설정하면 별도의 내부 파라미터 입력 없이 ZED 카메라에서 자동으로 캘리브레이션을 받아옵니다.
+시스템은 첫 번째 camera_info 메시지를 받을 때까지 기본값(fx=700, fy=700, cx=640, cy=360)을 사용합니다.
 
 With this setting, calibration is automatically obtained from the ZED camera without manual parameter input.
+The system uses default values (fx=700, fy=700, cx=640, cy=360) until the first camera_info message is received.
+
+**중요:** ZED 카메라를 먼저 실행한 후 LIVM 노드를 시작하거나, camera_info 토픽이 발행될 때까지 기다려야 합니다.
+**Important:** Launch the ZED camera before starting the LIVM node, or wait until the camera_info topic is being published.
 
 **방법 2: 수동 설정**
 

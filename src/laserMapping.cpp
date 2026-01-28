@@ -40,6 +40,7 @@
 #include <csignal>
 #include <chrono>
 #include <unistd.h>
+#include <atomic>
 #include <Python.h>
 #include <so3_math.h>
 #include <rclcpp/rclcpp.hpp>
@@ -84,6 +85,7 @@ const float MOV_THRESHOLD = 1.5f;
 double time_diff_lidar_to_imu = 0.0;
 
 mutex mtx_buffer;
+mutex mtx_camera_intrinsics;  // Stage A: Mutex for camera intrinsics thread safety
 condition_variable sig_buffer;
 
 string root_dir = ROOT_DIR;
@@ -121,11 +123,15 @@ struct CameraIntrinsics {
     double cx, cy;    // Principal point
     double k1, k2, k3;  // Radial distortion
     double p1, p2;    // Tangential distortion
+    
+    // Constructor to initialize with safe defaults
+    CameraIntrinsics() : fx(700.0), fy(700.0), cx(640.0), cy(360.0), 
+                          k1(0.0), k2(0.0), k3(0.0), p1(0.0), p2(0.0) {}
 } camera_intrinsics;
 
 // Stage A: Auto-load camera calibration from camera_info topic
 bool camera_info_auto_load = false;
-bool camera_info_received = false;
+std::atomic<bool> camera_info_received(false);
 
 // Stage A: Camera Extrinsics (Camera to LiDAR transformation)
 vector<double> camera_to_lidar_T(3, 0.0);
@@ -449,11 +455,28 @@ void depth_cbk(const sensor_msgs::msg::Image::UniquePtr msg)
 // Stage A: Callback to automatically load camera intrinsics from camera_info
 void camera_info_cbk(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
 {
-    if (!camera_info_auto_load || camera_info_received)
+    // Early return if already received or not in auto-load mode
+    if (!camera_info_auto_load || camera_info_received.load())
         return;
     
+    // Set flag immediately to prevent race condition
+    bool expected = false;
+    if (!camera_info_received.compare_exchange_strong(expected, true))
+        return;  // Another thread already processing
+    
+    // Validate K matrix size
+    if (msg->k.size() < 9) {
+        RCLCPP_ERROR(rclcpp::get_logger("camera_info"), 
+                     "Invalid camera_info K matrix size: %zu (expected 9)", msg->k.size());
+        camera_info_received = false;
+        return;
+    }
+    
+    // Thread-safe update of camera intrinsics
+    std::lock_guard<std::mutex> lock(mtx_camera_intrinsics);
+    
     // Extract intrinsics from camera_info K matrix
-    // K = [fx  0 cx]
+    // K = [fx  0 cx]  stored as [fx, 0, cx, 0, fy, cy, 0, 0, 1]
     //     [ 0 fy cy]
     //     [ 0  0  1]
     camera_intrinsics.fx = msg->k[0];
@@ -462,23 +485,35 @@ void camera_info_cbk(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
     camera_intrinsics.cy = msg->k[5];
     
     // Extract distortion coefficients (plumb_bob model: k1, k2, p1, p2, k3)
+    // Initialize to zero first
+    camera_intrinsics.k1 = 0.0;
+    camera_intrinsics.k2 = 0.0;
+    camera_intrinsics.k3 = 0.0;
+    camera_intrinsics.p1 = 0.0;
+    camera_intrinsics.p2 = 0.0;
+    
     if (msg->d.size() >= 5) {
         camera_intrinsics.k1 = msg->d[0];
         camera_intrinsics.k2 = msg->d[1];
         camera_intrinsics.p1 = msg->d[2];
         camera_intrinsics.p2 = msg->d[3];
         camera_intrinsics.k3 = msg->d[4];
+    } else if (msg->d.size() > 0) {
+        RCLCPP_WARN(rclcpp::get_logger("camera_info"),
+                    "Distortion vector has %zu elements (expected 5). Using zeros for missing values.", 
+                    msg->d.size());
     }
     
-    camera_info_received = true;
-    
-    std::cout << "[Stage A] Camera intrinsics auto-loaded from camera_info:" << std::endl;
-    std::cout << "  fx: " << camera_intrinsics.fx << ", fy: " << camera_intrinsics.fy << std::endl;
-    std::cout << "  cx: " << camera_intrinsics.cx << ", cy: " << camera_intrinsics.cy << std::endl;
-    std::cout << "  Distortion [k1, k2, p1, p2, k3]: [" 
-              << camera_intrinsics.k1 << ", " << camera_intrinsics.k2 << ", " 
-              << camera_intrinsics.p1 << ", " << camera_intrinsics.p2 << ", " 
-              << camera_intrinsics.k3 << "]" << std::endl;
+    RCLCPP_INFO(rclcpp::get_logger("camera_info"), 
+                "[Stage A] Camera intrinsics auto-loaded from camera_info:");
+    RCLCPP_INFO(rclcpp::get_logger("camera_info"),
+                "  fx: %.2f, fy: %.2f", camera_intrinsics.fx, camera_intrinsics.fy);
+    RCLCPP_INFO(rclcpp::get_logger("camera_info"),
+                "  cx: %.2f, cy: %.2f", camera_intrinsics.cx, camera_intrinsics.cy);
+    RCLCPP_INFO(rclcpp::get_logger("camera_info"),
+                "  Distortion [k1, k2, p1, p2, k3]: [%.6f, %.6f, %.6f, %.6f, %.6f]",
+                camera_intrinsics.k1, camera_intrinsics.k2, 
+                camera_intrinsics.p1, camera_intrinsics.p2, camera_intrinsics.k3);
 }
 
 double lidar_mean_scantime = 0.0;
