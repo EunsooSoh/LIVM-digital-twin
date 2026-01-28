@@ -9,7 +9,7 @@ Stage A is the initial calibration phase of the digital twin system, which fixes
 ## 입력 (Input)
 
 - 센서 구성 (Sensor configuration)
-- 마커(피듀셜) 설계/배치 (Marker/fiducial design and placement)
+- 마커(기준점) 설계/배치 (Marker/fiducial design and placement)
 - Digital Twin Prior Θ0
 
 ## 출력 (Output)
@@ -114,6 +114,8 @@ The following logs are printed at system startup:
 [INFO] Tag Parameters (temporary, to be replaced with Tag-Plane):
 [INFO]   Tag size: 0.100 m
 [INFO]   Tag family: tag36h11
+[INFO]   Note: Tag positions loading not implemented yet
+[INFO]         Will be added when Tag-Plane system is implemented
 [INFO] ==============================================
 ```
 

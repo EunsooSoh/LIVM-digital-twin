@@ -1056,8 +1056,8 @@ public:
         RCLCPP_INFO(this->get_logger(), "Tag Parameters (temporary, to be replaced with Tag-Plane):");
         RCLCPP_INFO(this->get_logger(), "  Tag size: %.3f m", tag_size);
         RCLCPP_INFO(this->get_logger(), "  Tag family: %s", tag_family.c_str());
-        RCLCPP_INFO(this->get_logger(), "  Note: Tag positions defined in config but not loaded yet");
-        RCLCPP_INFO(this->get_logger(), "  Will be implemented when Tag-Plane system is added");
+        RCLCPP_INFO(this->get_logger(), "  Note: Tag positions loading not implemented yet");
+        RCLCPP_INFO(this->get_logger(), "        Will be added when Tag-Plane system is implemented");
         RCLCPP_INFO(this->get_logger(), "==============================================");
 
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
