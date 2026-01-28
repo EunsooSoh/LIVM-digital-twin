@@ -48,3 +48,44 @@
             pcd_save_en: true
             interval: -1                 # how many LiDAR frames saved in each pcd file; 
                                         # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+
+        # Stage A: Camera Calibration Parameters
+        camera:
+            # Camera intrinsics (fixed from Stage A calibration)
+            intrinsics:
+                fx: 700.0               # Focal length in x (pixels)
+                fy: 700.0               # Focal length in y (pixels)
+                cx: 640.0               # Principal point x (pixels)
+                cy: 360.0               # Principal point y (pixels)
+                k1: 0.0                 # Radial distortion coefficient
+                k2: 0.0                 # Radial distortion coefficient
+                k3: 0.0                 # Radial distortion coefficient
+                p1: 0.0                 # Tangential distortion coefficient
+                p2: 0.0                 # Tangential distortion coefficient
+            
+            # Camera extrinsics (Camera to LiDAR/IMU transformation)
+            extrinsics:
+                camera_to_lidar_T: [ 0.0, 0.0, 0.0 ]  # Translation [x, y, z] in meters
+                camera_to_lidar_R: [ 1., 0., 0.,      # Rotation matrix (row-major)
+                                    0., 1., 0.,
+                                    0., 0., 1.]
+        
+        # Stage A: Temporary Tag/Marker Parameters (will be replaced with Tag-Plane later)
+        tags:
+            # Fiducial marker configuration for calibration
+            tag_size: 0.1               # Tag size in meters (temporary value)
+            tag_family: "tag36h11"      # AprilTag family
+            
+            # Tag positions in world frame {W} (temporary values, to be replaced)
+            tag_positions:
+                - id: 0
+                  position: [0.0, 0.0, 0.0]     # [x, y, z] in world frame
+                  orientation: [1., 0., 0., 0., 1., 0., 0., 0., 1.]  # Rotation matrix
+                
+                - id: 1
+                  position: [1.0, 0.0, 0.0]
+                  orientation: [1., 0., 0., 0., 1., 0., 0., 0., 1.]
+                
+                - id: 2
+                  position: [0.0, 1.0, 0.0]
+                  orientation: [1., 0., 0., 0., 1., 0., 0., 0., 1.]
