@@ -102,7 +102,7 @@ bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 bool   is_first_lidar = true;
 
 /* Camera (ZED) intrinsics & extrinsics (camera -> body) */
-double cam_fx = 700.0, cam_fy = 700.0, cam_cx = 640.0, cam_cy = 360.0; // 임시
+double cam_fx = 532.6182861328125, cam_fy = 532.6182861328125, cam_cx = 473.020751953125, cam_cy = 272.11669921875;
 double cam_depth_scale = 1.0; // depth 이미지 단위 -> 미터 (예: depth가 mm이면 0.001)
 Eigen::Matrix3d cam_R_cam2body = Eigen::Matrix3d::Identity();
 Eigen::Vector3d cam_T_cam2body = Eigen::Vector3d::Zero();
