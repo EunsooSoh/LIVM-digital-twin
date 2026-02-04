@@ -1,7 +1,7 @@
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 4
+        point_filter_num: 2
         max_iteration: 3
         filter_size_surf: 0.5
         filter_size_map: 0.5
@@ -12,10 +12,24 @@
         common:
             lid_topic:  "/velodyne_points"
             imu_topic:  "/zed/zed_node/imu/data"
+            depth_topic: "/zed/zed_node/depth/depth_registered"
+            rgb_topic: "/zed/zed_node/rgb/color/rect/image"
+
             time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
             time_offset_lidar_to_imu: -0.46680 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
                                         # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
 
+        camera:
+            fx: 532.6182861328125
+            fy: 532.6182861328125
+            cx: 473.020751953125
+            cy: 272.11669921875
+            depth_scale: 1.0   # depth 단위 -> 미터 (예: mm이면 0.001)
+            extrinsic_T: [0.01705270, -0.03820615, -0.10273507]
+            extrinsic_R: [0.0068142506, 0.0342471656, -0.9993901629, 
+                    0.9999710584, 0.0031482480, 0.0069260957, 
+                    0.0033835272, -0.9994084351, -0.0342247215]
+           
         preprocess:
             lidar_type: 2                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 
             scan_line: 16
