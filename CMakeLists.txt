@@ -62,6 +62,10 @@ find_package(pcl_conversions REQUIRED)
 find_package(livox_ros_driver2 REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
+# OpenCV 및 ArUco 라이브러리 추가
+find_package(OpenCV REQUIRED)
+find_package(cv_bridge REQUIRED)
+
 set(dependencies
   rclcpp
   rclcpp_components
@@ -74,6 +78,7 @@ set(dependencies
   pcl_ros
   pcl_conversions
   livox_ros_driver2
+  cv_bridge
 )
 
 # Thirdparty libraries
@@ -98,7 +103,7 @@ target_include_directories(fastlio_mapping PUBLIC
   $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
 )
-target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
+target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen ${OpenCV_LIBS})
 target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
 
 list(APPEND EOL_LIST "foxy" "galactic" "eloquent" "dashing" "crystal")
