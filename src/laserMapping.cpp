@@ -64,6 +64,7 @@
 #include "preprocess.h"
 #include <ikd-Tree/ikd_Tree.h>
 #include <sensor_msgs/image_encodings.hpp>
+#include "aruco_detector.h"
 
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
@@ -129,6 +130,9 @@ PointCloudXYZI::Ptr normvec(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr laserCloudOri(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr corr_normvect(new PointCloudXYZI(100000, 1));
 PointCloudXYZI::Ptr _featsArray;
+
+ArucoDetector aruco_detector;
+std::map<int, Eigen::Matrix4d> detected_markers; // marker_id -> pose in body frame
 
 pcl::VoxelGrid<PointType> downSizeFilterSurf;
 pcl::VoxelGrid<PointType> downSizeFilterMap;
@@ -225,6 +229,13 @@ void RGBpointBodyToWorld(PointType const * const pi, PointType * const po)
     po->intensity = pi->intensity;
 }
 
+// 카메라->Body 좌표 변환 함수 추가
+Eigen::Matrix4d transformCamToBody(const Eigen::Matrix4d& T_cam_marker) {
+    Eigen::Matrix4d T_body_cam = Eigen::Matrix4d::Identity();
+    T_body_cam.block<3,3>(0,0) = cam_R_cam2body;
+    T_body_cam.block<3,1>(0,3) = cam_T_cam2body;
+    return T_body_cam * T_cam_marker;
+}
 void RGBpointBodyLidarToIMU(PointType const * const pi, PointType * const po)
 {
     V3D p_body_lidar(pi->x, pi->y, pi->z);
@@ -476,10 +487,12 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
     sig_buffer.notify_all();
 }
 
+
 void rgb_cbk(const sensor_msgs::msg::Image::UniquePtr msg)
 {
     mtx_buffer.lock();
     double t = get_time_sec(msg->header.stamp);
+    
     // 루프백(시계역행) 처리: imu/lidar와 동일한 방식
     if (!is_first_lidar && t < last_timestamp_rgb)
     {
@@ -487,7 +500,23 @@ void rgb_cbk(const sensor_msgs::msg::Image::UniquePtr msg)
         rgb_buffer.clear();
     }
     last_timestamp_rgb = t;
-    rgb_buffer.push_back(sensor_msgs::msg::Image::ConstSharedPtr(new sensor_msgs::msg::Image(*msg)));
+    
+    // RGB 버퍼에 추가
+    auto rgb_msg = sensor_msgs::msg::Image::ConstSharedPtr(new sensor_msgs::msg::Image(*msg));
+    rgb_buffer.push_back(rgb_msg);
+    
+    // ArUco 마커 감지
+    std::vector<int> marker_ids;
+    std::vector<Eigen::Matrix4d> marker_poses_cam;
+    
+    if (aruco_detector.detectMarkers(rgb_msg, marker_ids, marker_poses_cam)) {
+        // 카메라 프레임 -> Body 프레임 변환
+        for (size_t i = 0; i < marker_ids.size(); i++) {
+            Eigen::Matrix4d T_body_marker = transformCamToBody(marker_poses_cam[i]);
+            detected_markers[marker_ids[i]] = T_body_marker;
+        }
+    }
+    
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
