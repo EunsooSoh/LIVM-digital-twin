@@ -104,14 +104,26 @@ bool ArucoDetector::detectMarkers(
         cv::Mat R;
         cv::Rodrigues(rvecs[i], R);
         
-        Eigen::Matrix4d pose = Eigen::Matrix4d::Identity();
+        // OpenCV 좌표계에서의 포즈
+        Eigen::Matrix4d pose_opencv = Eigen::Matrix4d::Identity();
         for (int r = 0; r < 3; r++) {
             for (int c = 0; c < 3; c++) {
-                pose(r, c) = R.at<double>(r, c);
+                pose_opencv(r, c) = R.at<double>(r, c);
             }
-            pose(r, 3) = tvecs[i][r];
+            pose_opencv(r, 3) = tvecs[i][r];
         }
-        marker_poses[i] = pose;
+        
+        // OpenCV 좌표계를 ROS 좌표계로 변환
+        // X_ros = Z_opencv (전방)
+        // Y_ros = -X_opencv (왼쪽)
+        // Z_ros = -Y_opencv (위)
+        Eigen::Matrix4d T_opencv_to_ros = Eigen::Matrix4d::Identity();
+        T_opencv_to_ros << 0,  0,  1, 0,
+                        -1,  0,  0, 0,
+                        0, -1,  0, 0,
+                        0,  0,  0, 1;
+        
+        marker_poses[i] = T_opencv_to_ros * pose_opencv;
     }
     
     return true;

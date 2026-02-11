@@ -650,25 +650,41 @@ bool sync_packages(MeasureGroup &meas)
     return true;
 }
 
+// IMU body frame 기준 point를 world frame으로 변환 (LiDAR extrinsic 적용하지 않음)
+void pointIMUBodyToWorld(PointType const * const pi, PointType * const po)
+{
+    V3D p_body(pi->x, pi->y, pi->z);
+    // LiDAR→IMU extrinsic(offset_R_L_I, offset_T_L_I)를 적용하지 않음
+    // 이미 IMU body frame에 있으므로 바로 world 변환
+    V3D p_global(state_point.rot * p_body + state_point.pos);
+
+    po->x = p_global(0);
+    po->y = p_global(1);
+    po->z = p_global(2);
+    po->intensity = pi->intensity;
+}
+
 int process_increments = 0;
 void map_incremental()
 {
     PointVector PointToAdd;
     PointVector PointNoNeedDownsample;
     PointToAdd.reserve(feats_down_size);
+    /*
     if (Measures.depth) {
-    PointVector cam_points;
-    cam_points.reserve(100000); // 필요에 따라 조정
-    depthImageToBodyPoints(Measures.depth, Measures.rgb, cam_points);
+        PointVector cam_points;
+        cam_points.reserve(100000); // 필요에 따라 조정
+        depthImageToBodyPoints(Measures.depth, Measures.rgb, cam_points);
 
-    // transform each point from body -> world using existing helper
-    for (auto &p : cam_points) {
-        PointType world_p = p;
-        // reuse existing pointBodyToWorld helper:
-        pointBodyToWorld(&p, &world_p); // 기존 함수가 (body)->(world) 변환을 수행한다고 가정
-        PointToAdd.push_back(world_p);
+        // transform each point from body -> world using existing helper
+        for (auto &p : cam_points) {
+            PointType world_p = p;
+            // IMU body frame → World 전용 함수 사용:
+            pointIMUBodyToWorld(&p, &world_p); 
+            PointToAdd.push_back(world_p);
+        }
     }
-}
+    */    
     PointNoNeedDownsample.reserve(feats_down_size);
     for (int i = 0; i < feats_down_size; i++)
     {

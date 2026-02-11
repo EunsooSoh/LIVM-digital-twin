@@ -29,7 +29,11 @@
             extrinsic_R: [0.0068142506, 0.0342471656, -0.9993901629, 
                     0.9999710584, 0.0031482480, 0.0069260957, 
                     0.0033835272, -0.9994084351, -0.0342247215]
-           
+
+        aruco:
+            dictionary: "DICT_4X4_50"
+            marker_length: 0.1  # meters
+               
         preprocess:
             lidar_type: 2                # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR, 
             scan_line: 16
