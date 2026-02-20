@@ -122,6 +122,13 @@ deque<sensor_msgs::msg::Image::ConstSharedPtr> depth_buffer;
 double last_timestamp_rgb = 0.0;
 double last_timestamp_depth = 0.0;
 
+// depth 게이팅 파라미터
+double depth_min_range = 0.1;  // 최소 depth 범위
+double depth_max_range = 10.0; // 최대 depth 범위
+double depth_gradient_threshold = 0.5; // depth gradient 임계값
+double depth_lidar_diff_threshold = 0.3; // LiDAR map과의 차이 임계값
+bool enable_depth_gating = true;
+
 PointCloudXYZI::Ptr featsFromMap(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_undistort(new PointCloudXYZI());
 PointCloudXYZI::Ptr feats_down_body(new PointCloudXYZI());
@@ -313,7 +320,6 @@ void depthImageToBodyPoints(const sensor_msgs::msg::Image::ConstSharedPtr &depth
     int height = depth_img->height;
     string enc = depth_img->encoding;
 
-    // handle common encodings: 32FC1, 16UC1
     bool is_float = (enc == sensor_msgs::image_encodings::TYPE_32FC1 || enc == "32FC1");
     bool is_uint16 = (enc == sensor_msgs::image_encodings::TYPE_16UC1 || enc == "16UC1");
     if (!is_float && !is_uint16) {
@@ -321,7 +327,10 @@ void depthImageToBodyPoints(const sensor_msgs::msg::Image::ConstSharedPtr &depth
         return;
     }
 
-    // rgb lookup if available
+    const uint8_t *data = depth_img->data.data();
+    int step = depth_img->step;
+    
+    // RGB 데이터
     const uint8_t *rgb_data = nullptr;
     string rgb_enc;
     int rgb_step = 0;
@@ -331,61 +340,136 @@ void depthImageToBodyPoints(const sensor_msgs::msg::Image::ConstSharedPtr &depth
         rgb_step = rgb_img->step;
     }
 
-    const uint8_t *data = depth_img->data.data();
-    int step = depth_img->step;
+    int inlier_count = 0;
+    int total_count = 0;
 
     for (int v = 0; v < height; ++v) {
         const uint8_t* row_ptr = data + v * step;
         for (int u = 0; u < width; ++u) {
+            total_count++;
+            
+            // Depth 값 읽기
             double z = 0.0;
             if (is_float) {
                 const float* fp = reinterpret_cast<const float*>(row_ptr);
                 z = static_cast<double>(fp[u]);
             } else if (is_uint16) {
                 const uint16_t* up = reinterpret_cast<const uint16_t*>(row_ptr);
-                z = static_cast<double>(up[u]) * cam_depth_scale; // scale param
+                z = static_cast<double>(up[u]) * cam_depth_scale;
             }
-            if (z <= 0.0001 || !isfinite(z)) continue;
-
-            // backproject to camera frame (ZED coordinate assumption: x right, y down, z forward)
+            
+            // ====== 게이팅 1: depth 값 유효성 검사 ======
+            if (!isfinite(z) || z <= 0.0001) continue;
+            if (enable_depth_gating && (z < depth_min_range || z > depth_max_range)) continue;
+            
+            // ====== 게이팅 2: depth gradient 검사 (불연속 경계 제거) ======
+            if (enable_depth_gating && u > 0 && u < width-1 && v > 0 && v < height-1) {
+                // 주변 픽셀의 depth 읽기
+                double z_left = 0.0, z_right = 0.0, z_up = 0.0, z_down = 0.0;
+                
+                if (is_float) {
+                    const float* fp_left = reinterpret_cast<const float*>(data + v * step);
+                    const float* fp_right = reinterpret_cast<const float*>(data + v * step);
+                    const float* fp_up = reinterpret_cast<const float*>(data + (v-1) * step);
+                    const float* fp_down = reinterpret_cast<const float*>(data + (v+1) * step);
+                    z_left = fp_left[u-1];
+                    z_right = fp_right[u+1];
+                    z_up = fp_up[u];
+                    z_down = fp_down[u];
+                } else if (is_uint16) {
+                    const uint16_t* up_left = reinterpret_cast<const uint16_t*>(data + v * step);
+                    const uint16_t* up_right = reinterpret_cast<const uint16_t*>(data + v * step);
+                    const uint16_t* up_up = reinterpret_cast<const uint16_t*>(data + (v-1) * step);
+                    const uint16_t* up_down = reinterpret_cast<const uint16_t*>(data + (v+1) * step);
+                    z_left = up_left[u-1] * cam_depth_scale;
+                    z_right = up_right[u+1] * cam_depth_scale;
+                    z_up = up_up[u] * cam_depth_scale;
+                    z_down = up_down[u] * cam_depth_scale;
+                }
+                
+                // Gradient 계산
+                double grad_x = fabs(z_right - z_left) / 2.0;
+                double grad_y = fabs(z_down - z_up) / 2.0;
+                double gradient_mag = sqrt(grad_x * grad_x + grad_y * grad_y);
+                
+                if (gradient_mag > depth_gradient_threshold) continue;
+            }
+            
+            // Backproject to camera frame
             double x_cam = (u - cam_cx) * z / cam_fx;
             double y_cam = (v - cam_cy) * z / cam_fy;
             Eigen::Vector3d p_cam(x_cam, y_cam, z);
-
-            // transform to body frame: p_body = R_cam2body * p_cam + T_cam2body
+            
+            // Transform to body frame
             Eigen::Vector3d p_body = cam_R_cam2body * p_cam + cam_T_cam2body;
-
+            
+            // ====== 게이팅 3: LiDAR map 기반 검증 ======
+            if (enable_depth_gating) {
+                // Body 좌표를 world 좌표로 변환
+                PointType temp_pt;
+                temp_pt.x = static_cast<float>(p_body[0]);
+                temp_pt.y = static_cast<float>(p_body[1]);
+                temp_pt.z = static_cast<float>(p_body[2]);
+                
+                PointType world_pt;
+                pointBodyToWorld(&temp_pt, &world_pt);
+                
+                // KD-tree에서 가장 가까운 점 검색
+                vector<float> pointSearchSqDis(1);
+                PointVector nearestPt;
+                ikdtree.Nearest_Search(world_pt, 1, nearestPt, pointSearchSqDis);
+                
+                if (!nearestPt.empty()) {
+                    // LiDAR map에서 예측되는 거리 계산
+                    Eigen::Vector3d nearest_world(nearestPt[0].x, nearestPt[0].y, nearestPt[0].z);
+                    Eigen::Vector3d camera_world(world_pt.x, world_pt.y, world_pt.z);
+                    double lidar_predicted_depth = (nearest_world - camera_world).norm();
+                    
+                    // Depth 관측값과 비교
+                    double depth_diff = fabs(z - lidar_predicted_depth);
+                    if (depth_diff > depth_lidar_diff_threshold) continue;
+                }
+            }
+            
+            // Inlier로 판정
+            inlier_count++;
+            
             PointType pt;
             pt.x = static_cast<float>(p_body[0]);
             pt.y = static_cast<float>(p_body[1]);
             pt.z = static_cast<float>(p_body[2]);
-
-            // set intensity from RGB if available: sample and convert to grayscale
+            
+            // RGB intensity
             if (rgb_data && rgb_step > 0) {
                 int px = u;
                 int py = v;
                 if (px >= 0 && px < (int)width && py >= 0 && py < (int)height) {
-                    const uint8_t* p = rgb_data + py * rgb_step + px * 3; // assume bgr/rgb3
-                    // try common encodings: "rgb8" or "bgr8"
+                    const uint8_t* p = rgb_data + py * rgb_step + px * 3;
                     uint8_t r=0,g=0,b=0;
                     if (rgb_enc == "rgb8" || rgb_enc == "RGB8") {
                         r = p[0]; g = p[1]; b = p[2];
-                    } else { // assume bgr8
+                    } else {
                         b = p[0]; g = p[1]; r = p[2];
                     }
-                    // grayscale
                     float gray = (0.299f * r + 0.587f * g + 0.114f * b) / 255.0f;
                     pt.intensity = gray;
                 } else {
                     pt.intensity = 0.0f;
                 }
             } else {
-                pt.intensity = static_cast<float>(z); // fallback: store depth as intensity
+                pt.intensity = static_cast<float>(z);
             }
-
-            // normals unused here
+            
             out_points.push_back(pt);
         }
+    }
+    
+    // Inlier 비율 출력
+    if (total_count > 0) {
+        float inlier_ratio = static_cast<float>(inlier_count) / total_count * 100.0f;
+        RCLCPP_INFO(rclcpp::get_logger("laserMapping"), 
+                    "Depth inlier ratio: %.2f%% (%d/%d)", 
+                    inlier_ratio, inlier_count, total_count);
     }
 }
 
@@ -1071,6 +1155,18 @@ public:
         this->declare_parameter<double>("camera.depth_scale", cam_depth_scale);
         this->declare_parameter<vector<double>>("camera.extrinsic_T", vector<double>()); // [tx, ty, tz]
         this->declare_parameter<vector<double>>("camera.extrinsic_R", vector<double>()); // 3x3 row-major
+        
+        this->declare_parameter("camera.enable_depth_gating", true);
+        this->declare_parameter("camera.depth_min_range", 0.1);
+        this->declare_parameter("camera.depth_max_range", 10.0);
+        this->declare_parameter("camera.depth_gradient_threshold", 0.5);
+        this->declare_parameter("camera.depth_lidar_diff_threshold", 0.3);
+
+        enable_depth_gating = this->get_parameter("camera.enable_depth_gating").as_bool();
+        depth_min_range = this->get_parameter("camera.depth_min_range").as_double();
+        depth_max_range = this->get_parameter("camera.depth_max_range").as_double();
+        depth_gradient_threshold = this->get_parameter("camera.depth_gradient_threshold").as_double();
+        depth_lidar_diff_threshold = this->get_parameter("camera.depth_lidar_diff_threshold").as_double();
 
         this->get_parameter_or<bool>("publish.path_en", path_en, true);
         this->get_parameter_or<bool>("publish.effect_map_en", effect_pub_en, false);
